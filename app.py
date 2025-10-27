@@ -40,6 +40,11 @@ DB_URL = env.get("DATABASE_URL")
 def init_db():
     with psycopg2.connect(DB_URL, sslmode='require') as conn:
         with conn.cursor() as c:
+            c.execute('''CREATE TABLE IF NOT EXISTS rounds (
+                            id SERIAL PRIMARY KEY,
+                            betting_open INTEGER DEFAULT 0,
+                            drawn_numbers TEXT
+                        )''')
             c.execute('''CREATE TABLE IF NOT EXISTS bets (
                             id SERIAL PRIMARY KEY,
                             user_id TEXT,
@@ -48,11 +53,6 @@ def init_db():
                             round_id INTEGER,
                             id_number TEXT,
                             FOREIGN KEY(round_id) REFERENCES rounds(id)
-                        )''')
-            c.execute('''CREATE TABLE IF NOT EXISTS rounds (
-                            id SERIAL PRIMARY KEY,
-                            betting_open INTEGER DEFAULT 0,
-                            drawn_numbers TEXT
                         )''')
         conn.commit()
 
