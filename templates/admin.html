@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Admin Panel</h2>
+
+<p>Betting is currently: <b>{{ 'OPEN' if betting_open else 'CLOSED' }}</b></p>
+<a href="{{ url_for('home') }}">Home</a><br><br>
+
+{% if betting_open %}
+    <form action="/close" method="post">
+        <button type="submit">Close Current Round</button>
+    </form>
+{% else %}
+    <form action="/new-round" method="post">
+        <button type="submit">Start New Round</button>
+    </form>
+{% endif %}
+
+<br>
+<a href="/logout">Logout</a>
+{% endblock %}

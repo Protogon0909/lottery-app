@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Round #{{ round_id }}</h2>
+<a href="{{ url_for('home') }}">Home</a>
+<p>Your numbers: {{ ticket_numbers|join(', ') }}</p>
+{% if drawn_numbers %}
+    <p>Winning numbers: {{ drawn_numbers|join(', ') }}</p>
+{% else %}
+    <p>Winning numbers not drawn yet.</p>
+{% endif %}
+{% endblock %}
