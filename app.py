@@ -32,8 +32,7 @@ oauth.register(
     server_metadata_url=f'https://{env.get("AUTH0_DOMAIN")}/.well-known/openid-configuration'
 )
 
-
-DB_NAME = 'lottery.db'
+DB_NAME = os.path.join(os.getcwd(), "lottery.db")
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -248,7 +247,7 @@ def my_bets():
         c = conn.cursor()
         c.execute("SELECT ticket_code, round_id FROM bets WHERE user_id=?", (user['id'],))
         bets = c.fetchall()
-        
+
     return render_template("my_bets.html", bets=bets)
     
 
