@@ -6,7 +6,9 @@ from flask import Flask, render_template, redirect, session, url_for, request
 from authlib.integrations.flask_client import OAuth
 from dotenv import find_dotenv, load_dotenv
 
-import sqlite3, os
+import psycopg2
+import psycopg2.extras
+import os
 from random import sample
 import uuid
 import qrcode
@@ -32,26 +34,26 @@ oauth.register(
     server_metadata_url=f'https://{env.get("AUTH0_DOMAIN")}/.well-known/openid-configuration'
 )
 
-DB_NAME = os.path.join(os.getcwd(), "lottery.db")
+DB_URL = env.get("DATABASE_URL")
 
 # --- DATABASE SETUP ---
 def init_db():
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS bets (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER,
-                        numbers TEXT,
-                        ticket_code TEXT UNIQUE,
-                        round_id INTEGER,
-                        id_number TEXT,
-                        FOREIGN KEY(round_id) REFERENCES rounds(id)
-                    )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS rounds (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        betting_open INTEGER DEFAULT 0,
-                        drawn_numbers TEXT
-                    )''')
+    with psycopg2.connect(DB_URL, sslmode='require') as conn:
+        with conn.cursor() as c:
+            c.execute('''CREATE TABLE IF NOT EXISTS bets (
+                            id SERIAL PRIMARY KEY,
+                            user_id TEXT,
+                            numbers TEXT,
+                            ticket_code TEXT UNIQUE,
+                            round_id INTEGER,
+                            id_number TEXT,
+                            FOREIGN KEY(round_id) REFERENCES rounds(id)
+                        )''')
+            c.execute('''CREATE TABLE IF NOT EXISTS rounds (
+                            id SERIAL PRIMARY KEY,
+                            betting_open INTEGER DEFAULT 0,
+                            drawn_numbers TEXT
+                        )''')
         conn.commit()
 
 @app.before_request
@@ -108,10 +110,10 @@ def bet():
         return redirect('/login')
     user = session['user']
 
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, betting_open FROM rounds WHERE betting_open=1 ORDER BY id DESC LIMIT 1")
-        round_row = c.fetchone()
+    with psycopg2.connect(DB_URL, sslmode='require') as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as c:
+            c.execute("SELECT id, betting_open FROM rounds WHERE betting_open=1 ORDER BY id DESC LIMIT 1")
+            round_row = c.fetchone()
 
     if not round_row:
             betting_open = 0
@@ -149,13 +151,13 @@ def bet():
         # --- store bet ---
         if not error:
             ticket_uuid = str(uuid.uuid4())
-            with sqlite3.connect(DB_NAME) as conn:
-                c = conn.cursor()
-                c.execute("""
-                    INSERT INTO bets (user_id, numbers, ticket_code, round_id, id_number)
-                    VALUES (?,?,?,?,?)
-                """, (user['id'], ','.join(map(str, numbers)), ticket_uuid, round_id, id_number))
-                conn.commit()
+            with psycopg2.connect(DB_URL, sslmode='require') as conn:
+                with conn.cursor() as c:
+                    c.execute("""
+                        INSERT INTO bets (user_id, numbers, ticket_code, round_id, id_number)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (user['id'], ','.join(map(str, numbers)), ticket_uuid, round_id, id_number))
+                    conn.commit()
                 success = "Bet successfully placed!"
 
                 qr_url = url_for('ticket', ticket_code=ticket_uuid, _external=True)
@@ -172,10 +174,10 @@ def admin():
     if 'user' not in session or session['user']['is_admin'] == 0:
         return redirect('/')
     
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, betting_open FROM rounds ORDER BY id DESC LIMIT 1")
-        round_row = c.fetchone()
+    with psycopg2.connect(os.environ.get("DATABASE_URL")) as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as c:
+            c.execute("SELECT id, betting_open FROM rounds ORDER BY id DESC LIMIT 1")
+            round_row = c.fetchone()
 
     round_id = round_row[0] if round_row else None
     betting_open = round_row[1] if round_row else 0
@@ -187,16 +189,16 @@ def new_round():
     if 'user' not in session or not session['user'].get('is_admin'):
         return "Forbidden", 403
 
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT id FROM rounds WHERE betting_open=1")
-        active_round = c.fetchone()
+    with psycopg2.connect(os.environ.get("DATABASE_URL")) as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as c:
+            c.execute("SELECT id FROM rounds WHERE betting_open=1")
+            active_round = c.fetchone()
 
-        if active_round:
-            return '', 204
+            if active_round:
+                return '', 204
 
-        c.execute("INSERT INTO rounds (betting_open) VALUES (1)")
-        conn.commit()
+            c.execute("INSERT INTO rounds (betting_open) VALUES (1)")
+            conn.commit()
 
     return redirect('/admin')
 
@@ -205,30 +207,36 @@ def close_round():
     if 'user' not in session or not session['user'].get('is_admin'):
         return "Forbidden", 403
 
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT id FROM rounds WHERE betting_open=1 ORDER BY id DESC LIMIT 1")
-        row = c.fetchone()
+    with psycopg2.connect(os.environ.get("DATABASE_URL")) as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as c:
+            c.execute("SELECT id FROM rounds WHERE betting_open=1 ORDER BY id DESC LIMIT 1")
+            row = c.fetchone()
 
-        if not row:
-            return '', 204
+            if not row:
+                return '', 204
 
-        round_id = row[0]
-        drawn_numbers = ','.join(map(str, sample(range(1, 46), 6)))
+            round_id = row['id']
+            drawn_numbers = ','.join(map(str, sample(range(1, 46), 6)))
 
-        c.execute("UPDATE rounds SET betting_open=0, drawn_numbers=? WHERE id=?", (drawn_numbers, round_id))
-        conn.commit()
+            c.execute(
+                "UPDATE rounds SET betting_open=0, drawn_numbers=%s WHERE id=%s",
+                (drawn_numbers, round_id)
+            )
+            conn.commit()
 
     return redirect('/admin')
 
 @app.route('/ticket/<ticket_code>')
 def ticket(ticket_code):
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("""SELECT b.numbers, r.drawn_numbers, r.id 
-                     FROM bets b JOIN rounds r ON b.round_id=r.id 
-                     WHERE b.ticket_code=?""", (ticket_code,))
-        row = c.fetchone()
+    with psycopg2.connect(os.environ.get("DATABASE_URL")) as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as c:
+            c.execute("""
+                SELECT b.numbers, r.drawn_numbers, r.id
+                FROM bets b
+                JOIN rounds r ON b.round_id = r.id
+                WHERE b.ticket_code = %s
+            """, (ticket_code,))
+            row = c.fetchone()
         if not row:
             return "Ticket not found", 404
         ticket_numbers, drawn_numbers, round_id = row
@@ -243,10 +251,10 @@ def my_bets():
         return redirect('/login')
     
     user = session['user']
-    with sqlite3.connect(DB_NAME) as conn:
-        c = conn.cursor()
-        c.execute("SELECT ticket_code, round_id FROM bets WHERE user_id=?", (user['id'],))
-        bets = c.fetchall()
+    with psycopg2.connect(os.environ.get("DATABASE_URL")) as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as c:
+            c.execute("SELECT ticket_code, round_id FROM bets WHERE user_id = %s", (user['id'],))
+            bets = c.fetchall()
 
     return render_template("my_bets.html", bets=bets)
     
